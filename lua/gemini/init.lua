@@ -17,6 +17,12 @@ local function close_gemini_window()
 	if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
 		vim.api.nvim_win_close(state.winnr, true)
 	end
+	if state.chan_id then
+		vim.fn.jobstop(state.chan_id)
+	end
+	if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+		vim.api.nvim_buf_delete(state.bufnr, { force = true })
+	end
 	state.winnr = nil
 	state.bufnr = nil
 	state.chan_id = nil
@@ -138,7 +144,7 @@ end
 function M.setup(opts)
 	-- Merge user config with defaults
 	config = vim.tbl_deep_extend("force", default_config, opts or {})
-	
+
 	if vim.fn.executable("gemini") == 1 then
 		vim.api.nvim_set_keymap(
 			"n",
@@ -166,5 +172,4 @@ function M.setup(opts)
 		end
 	end
 end
-
 return M
