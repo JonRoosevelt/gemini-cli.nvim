@@ -17,6 +17,12 @@ local function close_gemini_window()
 	if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
 		vim.api.nvim_win_close(state.winnr, true)
 	end
+	if state.chan_id then
+		vim.fn.jobstop(state.chan_id)
+	end
+	if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+		vim.api.nvim_buf_delete(state.bufnr, { force = true })
+	end
 	state.winnr = nil
 	state.bufnr = nil
 	state.chan_id = nil
@@ -35,27 +41,37 @@ local function open_gemini_window()
 	else
 		vim.cmd("vsplit")
 	end
-	vim.cmd("enew")
-	vim.cmd("setlocal buftype=nofile bufhidden=hide noswapfile")
-	state.winnr = vim.api.nvim_get_current_win()
-	state.bufnr = vim.api.nvim_get_current_buf()
-	vim.api.nvim_buf_set_name(state.bufnr, "gemini_cli")
 
-	state.chan_id = vim.fn.termopen("gemini", {
-		env = { ["EDITOR"] = "nvim" },
-		on_exit = function()
-			-- Check if the window is still valid before trying to close it
-			if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
-				local buf_in_win = vim.api.nvim_win_get_buf(state.winnr)
-				if buf_in_win == state.bufnr then
-					vim.api.nvim_win_close(state.winnr, true)
+	state.winnr = vim.api.nvim_get_current_win()
+
+	-- Reuse existing buffer if valid and process is alive
+	if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) and state.chan_id then
+		vim.api.nvim_win_set_buf(state.winnr, state.bufnr)
+	else
+		vim.cmd("enew")
+		vim.cmd("setlocal buftype=nofile bufhidden=hide noswapfile")
+		state.bufnr = vim.api.nvim_get_current_buf()
+		vim.api.nvim_buf_set_name(state.bufnr, "gemini_cli")
+
+		-- Map Esc to exit terminal mode in the Gemini buffer
+		vim.api.nvim_buf_set_keymap(state.bufnr, "t", "<Esc>", "<C-\\><C-n>", { noremap = true, silent = true })
+
+		state.chan_id = vim.fn.termopen("gemini", {
+			env = { ["EDITOR"] = "nvim" },
+			on_exit = function()
+				-- Check if the window is still valid before trying to close it
+				if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
+					local buf_in_win = vim.api.nvim_win_get_buf(state.winnr)
+					if buf_in_win == state.bufnr then
+						vim.api.nvim_win_close(state.winnr, true)
+					end
 				end
-			end
-			state.bufnr = nil
-			state.winnr = nil
-			state.chan_id = nil
-		end,
-	})
+				state.bufnr = nil
+				state.winnr = nil
+				state.chan_id = nil
+			end,
+		})
+	end
 end
 
 function M.toggle_gemini_cli()
@@ -135,11 +151,40 @@ function M.send_to_gemini()
 	end
 end
 
+function M.gemini_chat_focus(mode)
+	if state.winnr and vim.api.nvim_win_is_valid(state.winnr) then
+		local current_win = vim.api.nvim_get_current_win()
+		local win_tab = vim.api.nvim_win_get_tabpage(state.winnr)
+		local current_tab = vim.api.nvim_get_current_tabpage()
+
+		if win_tab ~= current_tab then
+			vim.api.nvim_set_current_tabpage(win_tab)
+			vim.api.nvim_set_current_win(state.winnr)
+			pcall(vim.cmd, "startinsert")
+			return
+		end
+
+		if current_win == state.winnr then
+			if mode == "t" then
+				vim.cmd("wincmd p")
+			else
+				pcall(vim.cmd, "startinsert")
+			end
+		else
+			vim.api.nvim_set_current_win(state.winnr)
+			pcall(vim.cmd, "startinsert")
+		end
+	else
+		open_gemini_window()
+	end
+end
+
 function M.setup(opts)
 	-- Merge user config with defaults
 	config = vim.tbl_deep_extend("force", default_config, opts or {})
-	
+
 	if vim.fn.executable("gemini") == 1 then
+		vim.cmd('command! GeminiChatFocus lua require("gemini").gemini_chat_focus()')
 		vim.api.nvim_set_keymap(
 			"n",
 			"<leader>og",
@@ -151,6 +196,18 @@ function M.setup(opts)
 			"<leader>sg",
 			':<C-U>lua require("gemini").send_to_gemini()<CR>',
 			{ noremap = true, silent = true, desc = "Send selection to Gemini" }
+		)
+		vim.api.nvim_set_keymap(
+			"n",
+			"<leader>gc",
+			'<cmd>lua require("gemini").gemini_chat_focus("n")<CR>',
+			{ noremap = true, silent = true, desc = "Focus Gemini Chat" }
+		)
+		vim.api.nvim_set_keymap(
+			"t",
+			"<leader>gc",
+			'<C-\\><C-n><cmd>lua require("gemini").gemini_chat_focus("t")<CR>',
+			{ noremap = true, silent = true, desc = "Focus Gemini Chat" }
 		)
 	else
 		local answer = vim.fn.input("Gemini CLI not found. Install it now? (y/n): ")
@@ -166,5 +223,4 @@ function M.setup(opts)
 		end
 	end
 end
-
 return M
